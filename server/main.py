@@ -103,6 +103,18 @@ class ImageArchiveRequest(BaseModel):
     metadata: ImageMetadata = ImageMetadata()
     options: Optional[Dict] = {}
 
+class CheckArchivedRequest(BaseModel):
+    url: str
+    check_file_exists: bool = True
+
+class CheckArchivedResponse(BaseModel):
+    archived: bool
+    job_id: Optional[str] = None
+    file_path: Optional[str] = None
+    file_exists: Optional[bool] = None
+    archived_date: Optional[datetime] = None
+    age_days: Optional[int] = None
+
 # Initialize components
 db = Database(Path.home() / "MediaArchive" / "archive.db")
 storage = StorageManager(Path.home() / "MediaArchive")
@@ -859,6 +871,26 @@ async def search_archives(q: str, limit: int = 50):
     """Search archived media"""
     results = await db.search(query=q, limit=limit)
     return {"results": results}
+
+@app.post("/check-archived", response_model=CheckArchivedResponse)
+async def check_archived(request: CheckArchivedRequest):
+    """
+    Check if a URL has been archived in the last 3 months.
+    Optionally verifies the file still exists on disk.
+    """
+    result = await db.check_url_archived(request.url)
+
+    if not result:
+        return CheckArchivedResponse(archived=False)
+
+    return CheckArchivedResponse(
+        archived=True,
+        job_id=result.get('id'),
+        file_path=result.get('file_path') if request.check_file_exists else None,
+        file_exists=result.get('file_exists') if request.check_file_exists else None,
+        archived_date=result.get('created_at'),
+        age_days=result.get('age_days')
+    )
 
 @app.get("/stats")
 async def get_stats():

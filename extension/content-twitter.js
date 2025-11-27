@@ -16,8 +16,16 @@
     text: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 012-2h2a2 2 0 012 2M9 5h6',
     loading: null, // special case
     success: 'M5 13l4 4L19 7',
-    error: 'M6 18L18 6M6 6l12 12'
+    error: 'M6 18L18 6M6 6l12 12',
+    archived: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z', // checkmark in circle
+    tooSmall: 'M4 14l6-6m0 0v5m0-5H5M20 10l-6 6m0 0v-5m0 5h5' // shrink arrows
   };
+
+  // Check if error is about content being too small
+  function isTooSmallError(error) {
+    const msg = (error?.message || error || '').toLowerCase();
+    return msg.includes('too small') || msg.includes('minimum');
+  }
 
   // X icon style reference (Nov 2024):
   // - Size: dynamically read from X's SVG (typically 18.75-20px)
@@ -60,6 +68,134 @@
   // Track processed posts - map to track mode ('timeline' or 'portal')
   const processedPosts = new WeakMap();
   const downloadingPosts = new Set();
+  // Track archive status for tweets (tweetId -> {archived, age_days, file_exists})
+  const archiveStatusCache = new Map();
+
+  // Check if a URL has been archived
+  async function checkArchiveStatus(url, tweetId) {
+    // Check cache first
+    if (archiveStatusCache.has(tweetId)) {
+      return archiveStatusCache.get(tweetId);
+    }
+
+    try {
+      const response = await browserAPI.runtime.sendMessage({
+        action: 'checkArchived',
+        url: url
+      });
+
+      const status = {
+        archived: response?.archived || false,
+        age_days: response?.age_days || 0,
+        file_exists: response?.file_exists || false,
+        file_path: response?.file_path || null
+      };
+
+      archiveStatusCache.set(tweetId, status);
+      return status;
+    } catch (e) {
+      console.log('[archiver] Could not check archive status:', e);
+      return { archived: false };
+    }
+  }
+
+  // Show re-archive prompt dialog
+  function showReArchivePrompt(tweetData, archiveStatus) {
+    return new Promise((resolve) => {
+      // Create modal overlay
+      const overlay = document.createElement('div');
+      overlay.className = 'archiver-modal-overlay';
+      overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(4px);
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      `;
+
+      const ageStr = archiveStatus.age_days === 0 ? 'today' :
+                     archiveStatus.age_days === 1 ? 'yesterday' :
+                     `${archiveStatus.age_days} days ago`;
+
+      const modal = document.createElement('div');
+      modal.className = 'archiver-modal';
+      modal.style.cssText = `
+        background: rgb(22, 24, 28);
+        border-radius: 16px;
+        padding: 24px;
+        max-width: 320px;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      `;
+
+      modal.innerHTML = `
+        <div style="font-size: 16px; font-weight: 600; margin-bottom: 8px;">Already Archived</div>
+        <div style="font-size: 14px; color: rgb(139, 148, 158); margin-bottom: 16px;">
+          This tweet was archived ${ageStr}.
+          ${archiveStatus.file_exists ? '✓ File exists on disk.' : '⚠ File may have been moved.'}
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button class="archiver-modal-btn" data-action="redownload" style="
+            background: rgb(29, 155, 240);
+            color: white;
+            border: none;
+            padding: 12px 16px;
+            border-radius: 9999px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+          ">Re-download fresh copy</button>
+          <button class="archiver-modal-btn" data-action="cancel" style="
+            background: transparent;
+            color: rgb(139, 148, 158);
+            border: 1px solid rgb(56, 68, 77);
+            padding: 12px 16px;
+            border-radius: 9999px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+          ">Cancel</button>
+        </div>
+      `;
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      // Handle clicks
+      modal.querySelectorAll('.archiver-modal-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const action = btn.dataset.action;
+          overlay.remove();
+          resolve(action === 'redownload');
+        });
+      });
+
+      // Click outside to cancel
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.remove();
+          resolve(false);
+        }
+      });
+
+      // ESC to cancel
+      const handleEsc = (e) => {
+        if (e.key === 'Escape') {
+          overlay.remove();
+          document.removeEventListener('keydown', handleEsc);
+          resolve(false);
+        }
+      };
+      document.addEventListener('keydown', handleEsc);
+    });
+  }
 
   // Save mode config
   const SAVE_MODES = {
@@ -359,12 +495,20 @@
         }
       } catch (error) {
         console.error('[archiver] Archive error:', error);
-        button.innerHTML = getIcon('error', size) + menu.outerHTML;
-        button.style.color = 'rgb(239, 68, 68)';
+        // Use different icon for "too small" vs other errors
+        if (isTooSmallError(error)) {
+          button.innerHTML = getIcon('tooSmall', size) + menu.outerHTML;
+          button.style.color = 'rgb(251, 191, 36)'; // amber
+          button.title = 'Media too small - may be a placeholder';
+        } else {
+          button.innerHTML = getIcon('error', size) + menu.outerHTML;
+          button.style.color = 'rgb(239, 68, 68)';
+        }
 
         setTimeout(() => {
           button.innerHTML = getIcon('download', size) + menu.outerHTML;
           button.style.color = 'rgb(113, 118, 123)';
+          button.title = '';
           downloadingPosts.delete(tweetData.tweetId);
         }, 3000);
       }
@@ -415,8 +559,33 @@
 
       if (downloadingPosts.has(tweetData.tweetId)) return;
 
+      // Check if already archived - show prompt if so
+      const archiveStatus = await checkArchiveStatus(tweetData.tweetUrl, tweetData.tweetId);
+      if (archiveStatus.archived) {
+        const shouldRedownload = await showReArchivePrompt(tweetData, archiveStatus);
+        if (!shouldRedownload) return;
+        // Clear cache so button updates after re-download
+        archiveStatusCache.delete(tweetData.tweetId);
+      }
+
       const saveMode = getSaveModeFromEvent(e);
       performDownload(saveMode);
+    });
+
+    // Check archive status asynchronously and update button appearance
+    checkArchiveStatus(tweetData.tweetUrl, tweetData.tweetId).then(status => {
+      if (status.archived && !downloadingPosts.has(tweetData.tweetId)) {
+        const size = button.dataset.iconSize || 20;
+        // Show archived indicator
+        button.innerHTML = getIcon('archived', size) + menu.outerHTML;
+        button.style.color = 'rgb(34, 197, 94)'; // green
+        button.style.opacity = '0.7';
+
+        const ageStr = status.age_days === 0 ? 'today' :
+                       status.age_days === 1 ? 'yesterday' :
+                       `${status.age_days} days ago`;
+        button.title = `Already archived ${ageStr}`;
+      }
     });
 
     return button;

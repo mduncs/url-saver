@@ -300,4 +300,19 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({error: error.message}));
     return true;
   }
+
+  if (request.action === 'checkArchived') {
+    fetch(`${SERVER_URL}/check-archived`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: request.url,
+        check_file_exists: true
+      })
+    })
+      .then(r => r.json())
+      .then(sendResponse)
+      .catch(error => sendResponse({ archived: false, error: error.message }));
+    return true;
+  }
 });

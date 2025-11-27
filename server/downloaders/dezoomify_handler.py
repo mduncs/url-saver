@@ -101,13 +101,16 @@ class DezoomifyHandler(BaseDownloader):
             # Add default options first
             options = options or {}
 
-            # Resolution control: use max-width or default to a reasonable 10000px
-            # This avoids downloading 40k pixel images (600MB+) by default
-            max_width = options.get('max_width', 10000)
-            if max_width:
-                cmd.extend(['--max-width', str(max_width)])
+            # Resolution control:
+            # - Default: ~4K (4000px) - quick reference quality
+            # - Shift+click: ~8K (8000px) - detailed study
+            # - Alt+click: full resolution (--largest) - archival quality
+            # Min check (2000px) catches failed/placeholder downloads
+            max_width = options.get('max_width', 4000)
+            if max_width == 0 or max_width is None:
+                cmd.append('--largest')  # Full resolution
             else:
-                cmd.append('--largest')  # Only if explicitly requested
+                cmd.extend(['--max-width', str(max_width)])
 
             # Parallelism for faster downloads
             parallelism = options.get('parallelism', 4)
@@ -158,21 +161,38 @@ class DezoomifyHandler(BaseDownloader):
 
             # Check if download was successful
             if process.returncode == 0 and output_path.exists():
+                file_size = output_path.stat().st_size
+
                 # Extract metadata from output
                 metadata = self._parse_metadata(stdout.decode('utf-8', errors='ignore'))
+                metadata['file_size'] = file_size
                 metadata['url'] = url
                 metadata['extractor'] = 'dezoomify-rs'
                 metadata['format'] = self._detect_format(url)
 
-                # Get image dimensions if available
+                # Get image dimensions and check minimum resolution
                 try:
                     from PIL import Image
                     with Image.open(output_path) as img:
                         metadata['width'] = img.width
                         metadata['height'] = img.height
                         metadata['resolution'] = f"{img.width}x{img.height}"
+
+                        # Check minimum pixel dimensions (default 2000px on shortest side)
+                        min_pixels = options.get('min_pixels', 2000)
+                        shortest_side = min(img.width, img.height)
+
+                        if shortest_side < min_pixels:
+                            logger.warning(f"Downloaded image too small: {img.width}x{img.height} (min: {min_pixels}px)")
+                            output_path.unlink()
+                            return DownloadResult(
+                                file_path=None,
+                                metadata={'url': url, 'width': img.width, 'height': img.height},
+                                success=False,
+                                error=f"Downloaded image too small ({img.width}x{img.height}). Minimum: {min_pixels}px on shortest side. Try a different resolution or check if full image is available."
+                            )
                 except ImportError:
-                    logger.debug("PIL not available, skipping image dimension detection")
+                    logger.debug("PIL not available, skipping dimension check")
                 except Exception as e:
                     logger.debug(f"Could not read image dimensions: {e}")
 

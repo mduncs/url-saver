@@ -52,8 +52,15 @@
     dot: `<svg viewBox="0 0 24 24" width="8" height="8"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>`,
     success: `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>`,
     error: `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18L18 6M6 6l12 12"/></svg>`,
-    loading: `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" class="archiver-spin"><circle cx="12" cy="12" r="9" stroke-dasharray="40 20"/></svg>`
+    loading: `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" class="archiver-spin"><circle cx="12" cy="12" r="9" stroke-dasharray="40 20"/></svg>`,
+    tooSmall: `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14l6-6m0 0v5m0-5H5"/><path d="M20 10l-6 6m0 0v-5m0 5h5"/></svg>`
   };
+
+  // Check if error is about image being too small
+  function isTooSmallError(error) {
+    const msg = (error?.message || error || '').toLowerCase();
+    return msg.includes('too small') || msg.includes('minimum');
+  }
 
   // Resolution presets for sites with large/original images
   const FLICKR_PRESETS = {
@@ -213,12 +220,20 @@
         }
       } catch (error) {
         console.error('Archive error:', error);
-        button.innerHTML = ICONS.error;
-        button.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+        // Use different icon for "too small" vs other errors
+        if (isTooSmallError(error)) {
+          button.innerHTML = ICONS.tooSmall;
+          button.style.backgroundColor = 'rgba(251, 191, 36, 0.9)'; // amber/yellow
+          button.title = 'Image too small - try higher resolution';
+        } else {
+          button.innerHTML = ICONS.error;
+          button.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+        }
 
         setTimeout(() => {
           button.innerHTML = ICONS.dot;
           button.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+          button.title = '';
           downloadingItems.delete(itemId);
         }, 3000);
       }
@@ -465,12 +480,20 @@
       } catch (err) {
         console.error('[archiver] Google Arts error:', err);
         btn.classList.remove('archiver-loading');
-        btn.innerHTML = ICONS.error;
-        btn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+        // Use different icon for "too small" vs other errors
+        if (isTooSmallError(err)) {
+          btn.innerHTML = ICONS.tooSmall;
+          btn.style.backgroundColor = 'rgba(251, 191, 36, 0.9)'; // amber/yellow
+          btn.title = 'Image too small - try Shift+click for 8K or Alt+click for full res';
+        } else {
+          btn.innerHTML = ICONS.error;
+          btn.style.backgroundColor = 'rgba(239, 68, 68, 0.9)';
+        }
         setTimeout(() => {
           btn.innerHTML = ICONS.dot;
           btn.style.backgroundColor = '';
-        }, 3000);
+          btn.title = '';
+        }, 4000);
       }
     });
 

@@ -189,6 +189,58 @@ class Database:
 
         return results
 
+    async def check_url_archived(
+        self,
+        url: str,
+        months: int = 3
+    ) -> Optional[Dict]:
+        """
+        Check if URL has been successfully archived recently.
+        Returns the most recent completed archive for this URL, or None.
+
+        Args:
+            url: The URL to check
+            months: Only check archives from last N months (default: 3)
+
+        Returns:
+            Dict with job info and file verification status, or None
+        """
+        since_date = datetime.now() - timedelta(days=months * 30)
+
+        async with self.conn.execute("""
+            SELECT * FROM archive_jobs
+            WHERE url = ?
+              AND status = 'completed'
+              AND created_at >= ?
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (url, since_date)) as cursor:
+            row = await cursor.fetchone()
+
+            if not row:
+                return None
+
+            job_dict = self._row_to_job_dict(row)
+
+            # Verify file actually exists on disk
+            file_exists = False
+            if job_dict.get('file_path'):
+                file_path = Path(job_dict['file_path'])
+                file_exists = file_path.exists()
+
+            # Calculate age in days
+            created_at = job_dict.get('created_at')
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            age_days = (datetime.now() - created_at).days if created_at else 0
+
+            return {
+                **job_dict,
+                'file_exists': file_exists,
+                'verified': file_exists,
+                'age_days': age_days
+            }
+
     async def get_stats(self) -> Dict:
         """Get archive statistics"""
         stats = {}

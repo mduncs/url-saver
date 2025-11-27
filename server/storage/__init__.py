@@ -1,7 +1,7 @@
 """
 Storage management for archived media
 
-New structure: ~/MediaArchive/YYYY-MM/HHMMSS-platform-slug.ext
+Structure: ~/MediaArchive/YYYY-MM/YYYY-MM-DD-HHMM-platform-slug.ext
 """
 
 from pathlib import Path
@@ -88,7 +88,7 @@ class StorageManager:
 
     def generate_filename(self, platform: str, title: str, extension: str) -> str:
         """
-        Generate filename: YYYY-MM-DD-platform-slug.ext
+        Generate filename: YYYY-MM-DD-HHMM-platform-slug.ext
 
         Args:
             platform: Platform name (twitter, youtube, etc)
@@ -99,7 +99,7 @@ class StorageManager:
             Formatted filename string
         """
         now = datetime.now()
-        date_prefix = now.strftime('%Y-%m-%d')
+        date_prefix = now.strftime('%Y-%m-%d-%H%M')  # includes 24hr time
 
         # Sanitize platform
         platform = platform.lower().strip() or 'unknown'
@@ -116,11 +116,11 @@ class StorageManager:
 
     def generate_base_name(self, platform: str, title: str) -> str:
         """
-        Generate base filename without extension: YYYY-MM-DD-platform-slug
+        Generate base filename without extension: YYYY-MM-DD-HHMM-platform-slug
         Useful for outtmpl where yt-dlp adds extension
         """
         now = datetime.now()
-        date_prefix = now.strftime('%Y-%m-%d')
+        date_prefix = now.strftime('%Y-%m-%d-%H%M')  # includes 24hr time
 
         platform = platform.lower().strip() or 'unknown'
         platform = re.sub(r'[^a-z0-9]', '', platform)
