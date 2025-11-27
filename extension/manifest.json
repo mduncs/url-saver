@@ -1,0 +1,120 @@
+{
+  "manifest_version": 3,
+  "name": "Media Archiver",
+  "version": "1.0.0",
+  "description": "One-click media archival with yt-dlp and gallery-dl",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "media-archiver@local.dev",
+      "strict_min_version": "109.0"
+    }
+  },
+
+  "permissions": [
+    "activeTab",
+    "cookies",
+    "storage",
+    "contextMenus",
+    "notifications"
+  ],
+
+  "host_permissions": [
+    "http://localhost:8888/*",
+    "<all_urls>"
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    }
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["*://twitter.com/*", "*://x.com/*"],
+      "js": ["config.js", "modules/emotion-wheel.js", "content-twitter.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.youtube.com/*", "*://youtube.com/*", "*://youtu.be/*"],
+      "js": ["content-youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.reddit.com/*", "*://old.reddit.com/*", "*://reddit.com/*"],
+      "js": ["content-reddit.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.flickr.com/*",
+        "*://*.deviantart.com/*",
+        "*://*.artstation.com/*",
+        "*://*.pinterest.com/*",
+        "*://*.pinterest.co.uk/*",
+        "*://*.pinterest.ca/*",
+        "*://*.pinterest.de/*",
+        "*://*.pinterest.fr/*",
+        "*://artsandculture.google.com/*",
+        "*://*.metmuseum.org/*",
+        "*://*.britishmuseum.org/*",
+        "*://*.rijksmuseum.nl/*",
+        "*://commons.wikimedia.org/*",
+        "*://*.nga.gov/*"
+      ],
+      "js": ["config.js", "modules/gallery-site-configs.js", "content-gallery.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": [
+        "*://twitter.com/*",
+        "*://x.com/*",
+        "*://www.youtube.com/*",
+        "*://youtube.com/*",
+        "*://youtu.be/*",
+        "*://www.reddit.com/*",
+        "*://old.reddit.com/*",
+        "*://reddit.com/*",
+        "*://*.flickr.com/*",
+        "*://*.deviantart.com/*",
+        "*://*.artstation.com/*",
+        "*://*.pinterest.com/*",
+        "*://*.pinterest.co.uk/*",
+        "*://*.pinterest.ca/*",
+        "*://*.pinterest.de/*",
+        "*://*.pinterest.fr/*",
+        "*://artsandculture.google.com/*",
+        "*://*.metmuseum.org/*",
+        "*://*.britishmuseum.org/*",
+        "*://*.rijksmuseum.nl/*",
+        "*://commons.wikimedia.org/*",
+        "*://*.nga.gov/*",
+        "*://*.twitch.tv/*",
+        "*://twitch.tv/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "commands": {
+    "quick-save": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Quick save current page"
+    }
+  },
+
+  "icons": {
+    "48": "icons/icon-48.png"
+  }
+}
