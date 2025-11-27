@@ -192,7 +192,7 @@ class StorageManager:
 
     async def save_metadata(self, file_path: Path, metadata: Dict) -> Optional[Path]:
         """
-        Save metadata as sidecar JSON file in same folder as media
+        Save metadata as .md sidecar with YAML frontmatter (Obsidian-native)
 
         Args:
             file_path: Path to the media file
@@ -204,21 +204,50 @@ class StorageManager:
         if not file_path:
             return None
 
-        # Metadata goes in same folder, same base name with .json extension
-        meta_file = file_path.with_suffix('.json')
+        meta_file = file_path.with_suffix('.md')
+        now = datetime.now()
 
-        # Add file information to metadata
-        metadata['file_info'] = {
-            'original_name': file_path.name,
-            'path': str(file_path.relative_to(self.base) if file_path.is_relative_to(self.base) else file_path),
-            'size': file_path.stat().st_size if file_path.exists() else 0,
-            'archived_at': datetime.now().isoformat()
-        }
+        # Build YAML frontmatter
+        lines = ["---"]
 
-        # Write metadata
+        # Core fields
+        if metadata.get('original_url'):
+            lines.append(f"source: {metadata['original_url']}")
+        if metadata.get('platform'):
+            lines.append(f"platform: {metadata['platform']}")
+        if metadata.get('title'):
+            title = str(metadata['title']).replace('"', '\\"')
+            lines.append(f'title: "{title}"')
+        if metadata.get('author'):
+            author = str(metadata['author']).replace('"', '\\"')
+            lines.append(f'author: "{author}"')
+
+        lines.append(f"archived: {now.isoformat()}")
+
+        # Optional fields
+        if metadata.get('page_url'):
+            lines.append(f"page_url: {metadata['page_url']}")
+        if metadata.get('description'):
+            desc = str(metadata['description']).replace('"', '\\"').replace('\n', ' ')
+            lines.append(f'description: "{desc}"')
+        if metadata.get('save_mode'):
+            lines.append(f"save_mode: {metadata['save_mode']}")
+        if metadata.get('handler'):
+            lines.append(f"handler: {metadata['handler']}")
+
+        # File info
+        if file_path.exists():
+            lines.append(f"file_size: {file_path.stat().st_size}")
+
+        lines.append("---")
+        lines.append("")
+
+        # Embed the media file
+        lines.append(f"![[{file_path.name}]]")
+        lines.append("")
+
         try:
-            with open(meta_file, 'w') as f:
-                json.dump(metadata, f, indent=2, default=str)
+            meta_file.write_text("\n".join(lines))
             logger.info(f"Saved metadata: {meta_file.name}")
             return meta_file
         except Exception as e:
@@ -226,18 +255,64 @@ class StorageManager:
             return None
 
     def get_metadata(self, file_path: Path) -> Optional[Dict]:
-        """Retrieve metadata for a file (checks sidecar .json)"""
-        # New approach: sidecar JSON in same folder
-        meta_file = file_path.with_suffix('.json')
-
-        if meta_file.exists():
+        """Retrieve metadata for a file (checks .md sidecar, falls back to .json)"""
+        # Primary: .md sidecar with YAML frontmatter
+        md_file = file_path.with_suffix('.md')
+        if md_file.exists():
             try:
-                with open(meta_file, 'r') as f:
+                content = md_file.read_text()
+                return self._parse_yaml_frontmatter(content)
+            except Exception as e:
+                logger.error(f"Failed to parse .md metadata: {e}")
+
+        # Fallback: legacy .json sidecar
+        json_file = file_path.with_suffix('.json')
+        if json_file.exists():
+            try:
+                with open(json_file, 'r') as f:
                     return json.load(f)
             except Exception as e:
-                logger.error(f"Failed to load metadata: {e}")
+                logger.error(f"Failed to load .json metadata: {e}")
 
         return None
+
+    def _parse_yaml_frontmatter(self, content: str) -> Dict:
+        """Parse YAML frontmatter from markdown content"""
+        metadata = {}
+        if not content.startswith('---'):
+            return metadata
+
+        # Find end of frontmatter
+        end_idx = content.find('\n---', 3)
+        if end_idx == -1:
+            return metadata
+
+        frontmatter = content[4:end_idx]  # Skip initial '---\n'
+
+        for line in frontmatter.split('\n'):
+            line = line.strip()
+            if not line or ':' not in line:
+                continue
+
+            key, _, value = line.partition(':')
+            key = key.strip()
+            value = value.strip()
+
+            # Remove quotes if present
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1].replace('\\"', '"')
+
+            # Parse arrays like tags: ["a", "b"]
+            if value.startswith('[') and value.endswith(']'):
+                import ast
+                try:
+                    value = ast.literal_eval(value)
+                except:
+                    pass
+
+            metadata[key] = value
+
+        return metadata
 
     def get_storage_stats(self) -> Dict:
         """Get storage statistics across all YYYY-MM folders"""
@@ -249,8 +324,8 @@ class StorageManager:
         for item in self.base.iterdir():
             if item.is_dir() and re.match(r'^\d{4}-\d{2}$', item.name):
                 files = [f for f in item.iterdir() if f.is_file()]
-                # Exclude metadata files from count
-                media_files = [f for f in files if not f.suffix == '.json']
+                # Exclude metadata/sidecar files from count
+                media_files = [f for f in files if f.suffix not in ('.json', '.md')]
 
                 size = sum(f.stat().st_size for f in files)
                 count = len(media_files)

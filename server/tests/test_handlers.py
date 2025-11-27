@@ -120,13 +120,14 @@ class TestGalleryDlHandler:
         assert "auth_token\ttest123" in content
 
     def test_find_all_media_files(self, handler, temp_storage_dir):
-        """Media file finder catches all extensions"""
+        """Media file finder catches all extensions, excludes sidecars"""
         # Create various media files
         (temp_storage_dir / "image.jpg").touch()
         (temp_storage_dir / "image.png").touch()
         (temp_storage_dir / "video.mp4").touch()
         (temp_storage_dir / "audio.mp3").touch()
-        (temp_storage_dir / "metadata.json").touch()  # Should be excluded
+        (temp_storage_dir / "video.md").touch()  # .md sidecar - should be excluded
+        (temp_storage_dir / "metadata.json").touch()  # legacy .json - should be excluded
 
         files = handler._find_all_media_files(temp_storage_dir)
         unique_files = set(files)  # Handler may return duplicates from glob patterns
@@ -138,6 +139,7 @@ class TestGalleryDlHandler:
         assert ".mp4" in extensions
         assert ".mp3" in extensions
         assert ".json" not in extensions
+        assert ".md" not in extensions
 
 
 class TestDezoomifyHandler:

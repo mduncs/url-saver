@@ -490,7 +490,7 @@ async def process_download(
                 screenshot_path = output_dir / f"{basename}.context.png"
                 decode_and_save_screenshot(screenshot, screenshot_path)
 
-            # Save metadata JSON
+            # Save metadata as .md sidecar
             metadata = {
                 "original_url": url,
                 "download_date": now.isoformat(),
@@ -498,8 +498,23 @@ async def process_download(
                 "title": title,
                 "platform": platform
             }
-            metadata_path = output_dir / f"{basename}.json"
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            md_lines = [
+                "---",
+                f"source: {url}",
+                f"platform: {platform}",
+            ]
+            if title:
+                md_lines.append(f'title: "{title.replace(chr(34), chr(92)+chr(34))}"')
+            md_lines.append(f"archived: {now.isoformat()}")
+            md_lines.append(f"save_mode: {save_mode}")
+            md_lines.append("---")
+            md_lines.append("")
+            if screenshot:
+                md_lines.append(f"![[{screenshot_path.name}]]")
+            md_lines.append("")
+
+            metadata_path = output_dir / f"{basename}.md"
+            metadata_path.write_text("\n".join(md_lines))
 
             final_path = screenshot_path if screenshot else metadata_path
 
@@ -648,7 +663,7 @@ async def process_download(
                         decode_and_save_screenshot(screenshot, screenshot_path)
                         final_path = screenshot_path
 
-                        # Save metadata
+                        # Save metadata as .md sidecar
                         metadata = {
                             "original_url": url,
                             "download_date": now.isoformat(),
@@ -658,8 +673,24 @@ async def process_download(
                             "fallback": True,
                             "reason": "no_media_found"
                         }
-                        metadata_path = output_dir / f"{basename}.json"
-                        metadata_path.write_text(json.dumps(metadata, indent=2))
+                        md_lines = [
+                            "---",
+                            f"source: {url}",
+                            f"platform: {platform}",
+                        ]
+                        if title:
+                            md_lines.append(f'title: "{title.replace(chr(34), chr(92)+chr(34))}"')
+                        md_lines.append(f"archived: {now.isoformat()}")
+                        md_lines.append(f"save_mode: {save_mode}")
+                        md_lines.append("fallback: true")
+                        md_lines.append("fallback_reason: no_media_found")
+                        md_lines.append("---")
+                        md_lines.append("")
+                        md_lines.append(f"![[{screenshot_path.name}]]")
+                        md_lines.append("")
+
+                        metadata_path = output_dir / f"{basename}.md"
+                        metadata_path.write_text("\n".join(md_lines))
 
                         await db.update_job_complete(
                             job_id=job_id,

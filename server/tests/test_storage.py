@@ -25,15 +25,27 @@ class TestStorageManager:
         assert path.name == expected_name
 
     def test_generate_filename_format(self, storage_manager):
-        """Filename follows YYYY-MM-DD-platform-slug.ext format"""
+        """Filename follows YYYY-MM-DD-HHMM-platform-slug.ext format"""
+        filename = storage_manager.generate_filename(
+            platform="youtube",
+            title="Some Video",
+            extension="mp4"
+        )
+
+        # Generic format: YYYY-MM-DD-HHMM-platform-slug.ext
+        pattern = r"^\d{4}-\d{2}-\d{2}-\d{4}-youtube-some-video\.mp4$"
+        assert re.match(pattern, filename), f"Filename {filename} doesn't match pattern"
+
+    def test_generate_filename_twitter(self, storage_manager):
+        """Twitter filename format for future context reference"""
         filename = storage_manager.generate_filename(
             platform="twitter",
             title="Hello World Test",
             extension="mp4"
         )
 
-        # Should match: YYYY-MM-DD-twitter-hello-world-test.mp4
-        pattern = r"^\d{4}-\d{2}-\d{2}-twitter-hello-world-test\.mp4$"
+        # Twitter format: YYYY-MM-DD-HHMM-twitter-slug.ext
+        pattern = r"^\d{4}-\d{2}-\d{2}-\d{4}-twitter-hello-world-test\.mp4$"
         assert re.match(pattern, filename), f"Filename {filename} doesn't match pattern"
 
     def test_generate_filename_sanitizes_platform(self, storage_manager):
@@ -117,57 +129,91 @@ class TestStorageManager:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_save_metadata_creates_json(self, storage_manager, temp_storage_dir):
-        """Metadata saves as .json sidecar"""
+    async def test_save_metadata_creates_md(self, storage_manager, temp_storage_dir):
+        """Metadata saves as .md sidecar with YAML frontmatter"""
         media_path = temp_storage_dir / "test-video.mp4"
-        media_path.touch()
+        media_path.write_bytes(b"fake video data")
 
         metadata = {
+            "original_url": "https://example.com/video",
+            "platform": "example",
             "title": "Test Video",
-            "author": "testuser",
-            "duration": 120
+            "author": "testuser"
         }
 
         result = await storage_manager.save_metadata(media_path, metadata)
 
         assert result is not None
-        assert result.name == "test-video.json"
+        assert result.name == "test-video.md"
         assert result.exists()
 
-    def test_get_metadata_returns_saved_data(self, storage_manager, temp_storage_dir):
-        """get_metadata reads back saved JSON"""
-        import json
+        # Verify YAML frontmatter
+        content = result.read_text()
+        assert content.startswith("---")
+        assert "source: https://example.com/video" in content
+        assert "platform: example" in content
+        assert 'title: "Test Video"' in content
+        assert "![[test-video.mp4]]" in content
 
+    def test_get_metadata_reads_md_sidecar(self, storage_manager, temp_storage_dir):
+        """get_metadata reads .md sidecar with YAML frontmatter"""
         media_path = temp_storage_dir / "test.mp4"
-        meta_path = temp_storage_dir / "test.json"
+        md_path = temp_storage_dir / "test.md"
 
-        test_data = {"title": "Test", "author": "user"}
-        with open(meta_path, 'w') as f:
-            json.dump(test_data, f)
+        md_content = """---
+source: https://example.com
+platform: youtube
+title: "Test Title"
+author: "Test User"
+tags: ["tag1", "tag2"]
+---
+
+![[test.mp4]]
+"""
+        md_path.write_text(md_content)
 
         result = storage_manager.get_metadata(media_path)
 
-        assert result["title"] == "Test"
+        assert result["source"] == "https://example.com"
+        assert result["platform"] == "youtube"
+        assert result["title"] == "Test Title"
+        assert result["author"] == "Test User"
+        assert result["tags"] == ["tag1", "tag2"]
+
+    def test_get_metadata_falls_back_to_json(self, storage_manager, temp_storage_dir):
+        """get_metadata falls back to legacy .json if no .md exists"""
+        import json
+
+        media_path = temp_storage_dir / "legacy.mp4"
+        json_path = temp_storage_dir / "legacy.json"
+
+        test_data = {"title": "Legacy", "author": "user"}
+        json_path.write_text(json.dumps(test_data))
+
+        result = storage_manager.get_metadata(media_path)
+
+        assert result["title"] == "Legacy"
         assert result["author"] == "user"
 
     def test_get_metadata_missing_file(self, storage_manager, temp_storage_dir):
-        """get_metadata returns None for missing JSON"""
+        """get_metadata returns None for missing sidecar"""
         media_path = temp_storage_dir / "nonexistent.mp4"
         result = storage_manager.get_metadata(media_path)
         assert result is None
 
     def test_get_storage_stats(self, storage_manager, temp_storage_dir):
-        """Storage stats counts files correctly"""
+        """Storage stats counts files correctly, excludes sidecars"""
         # Create some test files in dated folders
         month_dir = temp_storage_dir / "2024-01"
         month_dir.mkdir()
         (month_dir / "video1.mp4").write_bytes(b"x" * 1000)
         (month_dir / "video2.mp4").write_bytes(b"x" * 2000)
-        (month_dir / "video1.json").write_text("{}")  # Metadata, shouldn't count
+        (month_dir / "video1.md").write_text("---\n---\n")  # .md sidecar, shouldn't count
+        (month_dir / "video1.json").write_text("{}")  # legacy .json, shouldn't count
 
         stats = storage_manager.get_storage_stats()
 
-        assert stats["file_count"] == 2  # Excludes .json
+        assert stats["file_count"] == 2  # Excludes .json and .md
         assert stats["total_size"] >= 3000
         assert "2024-01" in stats["months"]
 
