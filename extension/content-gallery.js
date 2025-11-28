@@ -128,10 +128,11 @@
   }
 
   function createArchiveButton(element) {
-    const imageUrl = config.getImageUrl(element);
     const pageUrl = config.getPageUrl(element);
     const metadata = config.getMetadata(element);
-    const itemId = generateItemId(pageUrl, imageUrl);
+    // Get initial imageUrl for itemId (may be updated at click time for Flickr)
+    const initialImageUrl = config.getImageUrl(element);
+    const itemId = generateItemId(pageUrl, initialImageUrl);
 
     const button = document.createElement('button');
     button.className = 'media-archiver-gallery-btn';
@@ -155,20 +156,26 @@
 
       // Handle Flickr resolution options
       let resolutionOptions = {};
+      let maxWidth = null;
       if (currentSite === 'flickr') {
         if (e.altKey || e.metaKey) {
           // Alt/Option = full original (with warning for potentially huge files)
-          resolutionOptions = { max_width: FLICKR_PRESETS.full.maxWidth };
+          maxWidth = FLICKR_PRESETS.full.maxWidth;  // null
+          resolutionOptions = { max_width: maxWidth };
           if (!confirm(`Download FULL original resolution?\n\nSome Flickr originals can be very large.\n\nContinue?`)) {
             return;
           }
           console.log('[archiver] Flickr: downloading at full original (no limit)');
         } else {
           // Default: original capped at 8K
-          resolutionOptions = { max_width: FLICKR_PRESETS.default.maxWidth };
+          maxWidth = FLICKR_PRESETS.default.maxWidth;  // 8000
+          resolutionOptions = { max_width: maxWidth };
           console.log('[archiver] Flickr: downloading at 8K max');
         }
       }
+
+      // Get imageUrl at click time (for Flickr, uses maxWidth to select best size)
+      const imageUrl = config.getImageUrl(element, maxWidth);
 
       const saveMode = getSaveModeFromEvent(e);
       downloadingItems.add(itemId);

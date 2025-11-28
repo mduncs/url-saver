@@ -772,8 +772,9 @@ async def archive_image(request: ImageArchiveRequest):
             else:
                 raise ValueError(f"dezoomify-rs failed: {result.error}")
 
-        # Use gallery-dl for Flickr (to get original/full resolution)
-        elif handler and handler.name == "gallery-dl" and 'flickr.com' in request.image_url:
+        # Use gallery-dl for Flickr photo pages (to get original/full resolution)
+        # Falls back to direct CDN download if gallery-dl fails (e.g. API key expired)
+        elif handler and handler.name == "gallery-dl" and 'flickr.com/photos/' in (request.page_url or request.image_url):
             # Build cookies dict
             cookies_dict = {c.name: c.value for c in request.cookies}
             max_width = options.get('max_width')
@@ -799,7 +800,123 @@ async def archive_image(request: ImageArchiveRequest):
                     image_path = new_path
                 logger.info(f"gallery-dl saved: {image_path.name}")
             else:
-                raise ValueError(f"gallery-dl failed: {result.error}")
+                # Fallback: try higher resolution variants via URL manipulation
+                logger.warning(f"gallery-dl failed, trying URL size variants: {result.error}")
+
+                # Flickr URL pattern: {id}_{secret}_{size}.{ext}
+                # Sizes: s=75, q=150, t=100, m=240, n=320, w=400, z=640, c=800, b=1024, h=1600, k=2048, o=original
+                import re
+                base_url = request.image_url
+                size_pattern = r'_([a-z])(\.[a-zA-Z]+)$'
+
+                # Build list of URLs to try
+                # _o=original (requires owner permission, often 404s), _k=2048, _h=1600, _b=1024
+                urls_to_try = []
+                match = re.search(size_pattern, base_url)
+                if match:
+                    ext_part = match.group(2)
+                    base_without_size = re.sub(size_pattern, '', base_url)
+                    if max_width is None:
+                        # Alt+Click: user wants original, try _o first
+                        sizes = ['_o', '_k', '_h', '_b']
+                        logger.info("Flickr fallback: trying original (_o, _k, _h, _b)")
+                    else:
+                        # Default click: skip _o (usually 404s), start with _k
+                        sizes = ['_k', '_h', '_b']
+                        logger.info("Flickr fallback: trying public sizes (_k, _h, _b)")
+                    for size in sizes:
+                        urls_to_try.append(f"{base_without_size}{size}{ext_part}")
+                urls_to_try.append(base_url)  # Original as last resort
+
+                image_path = None
+                downloaded_size = None
+                async with httpx.AsyncClient(follow_redirects=True, timeout=30.0, cookies=cookies_dict) as client:
+                    # First try URL size swapping (works if extension already sent correct URL)
+                    for try_url in urls_to_try:
+                        try:
+                            response = await client.get(try_url, headers={
+                                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                                'Referer': request.page_url or request.image_url
+                            })
+                            if response.status_code == 200:
+                                content_type = response.headers.get('content-type', '')
+                                if 'jpeg' in content_type or 'jpg' in content_type:
+                                    ext = '.jpg'
+                                elif 'png' in content_type:
+                                    ext = '.png'
+                                elif 'webp' in content_type:
+                                    ext = '.webp'
+                                else:
+                                    ext = Path(try_url.split('?')[0]).suffix or '.jpg'
+                                image_path = output_dir / f"{basename}{ext}"
+                                image_path.write_bytes(response.content)
+                                downloaded_size = try_url.split('_')[-1].split('.')[0]
+                                logger.info(f"Fallback saved: {image_path.name} (from {downloaded_size} variant)")
+                                break
+                        except Exception as e:
+                            logger.debug(f"Size variant {try_url} failed: {e}")
+                            continue
+
+                    # If only got _b (1024px), try fetching page HTML for high-res URLs
+                    # High-res sizes (k,h,3k,4k,5k,o) have different secrets than thumbnail
+                    if image_path and downloaded_size == 'b' and request.page_url:
+                        logger.info("Got _b size only, trying page HTML extraction for high-res")
+                        try:
+                            page_response = await client.get(request.page_url, headers={
+                                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                            })
+                            if page_response.status_code == 200:
+                                html = page_response.text
+                                # Extract photo ID from image URL
+                                photo_id_match = re.search(r'/(\d+)_[a-f0-9]+_[a-z0-9]+\.jpg', request.image_url, re.I)
+                                if photo_id_match:
+                                    photo_id = photo_id_match.group(1)
+                                    # Try sizes in order: 5k, 4k, 3k, k, h (skip o unless alt-click)
+                                    size_order = ['o', '5k', '4k', '3k', 'k', 'h'] if max_width is None else ['5k', '4k', '3k', 'k', 'h']
+                                    for size in size_order:
+                                        # Match escaped URL pattern for this photo
+                                        pattern = rf'\\/\\/live\.staticflickr\.com\\/\d+\\/{photo_id}_[a-f0-9]+_{size}\.jpg'
+                                        url_match = re.search(pattern, html, re.I)
+                                        if url_match:
+                                            high_res_url = 'https:' + url_match.group(0).replace('\\/', '/')
+                                            logger.info(f"Found {size} URL in page HTML: {high_res_url}")
+                                            hr_response = await client.get(high_res_url, headers={
+                                                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                                                'Referer': request.page_url
+                                            })
+                                            if hr_response.status_code == 200:
+                                                # Replace the _b image with high-res
+                                                image_path.write_bytes(hr_response.content)
+                                                downloaded_size = size
+                                                logger.info(f"Upgraded to {size} size from page HTML")
+                                                break
+                        except Exception as e:
+                            logger.warning(f"Page HTML extraction failed: {e}")
+
+                if not image_path:
+                    raise ValueError("All Flickr size variants failed")
+
+                # Check pixel dimensions
+                try:
+                    from PIL import Image
+                    with Image.open(image_path) as img:
+                        # Check minimum (2000px default)
+                        min_pixels = options.get('min_pixels', 2000)
+                        shortest_side = min(img.width, img.height)
+                        if shortest_side < min_pixels:
+                            logger.warning(f"Flickr fallback too small: {img.width}x{img.height} (min: {min_pixels}px)")
+                            image_path.unlink()
+                            raise ValueError(f"Downloaded image too small ({img.width}x{img.height}). Min: {min_pixels}px. gallery-dl API may be needed for original resolution.")
+
+                        # Check maximum if set (8K default click)
+                        if max_width and max(img.width, img.height) > max_width:
+                            logger.warning(f"Flickr image exceeds max_width: {img.width}x{img.height} > {max_width}")
+                            # Don't delete - user might still want it, just warn
+                            logger.info(f"Keeping image despite exceeding max_width (use Alt+Click for unlimited)")
+
+                        logger.info(f"Flickr fallback dimensions: {img.width}x{img.height}")
+                except ImportError:
+                    pass
         else:
             # Direct HTTP download for regular images
             # Build cookies dict from request

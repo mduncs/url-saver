@@ -12,12 +12,19 @@ const GallerySiteConfigs = (function() {
       itemSelector: '.photo-list-photo-view, .photo-card, .view.photo-well-media-scrappy-view, .photo-well-media-scrappy-view, .main-photo',
       containerSelector: '.photo-list-view, .photostream, .photo-list-photo-container, .photo-page-scrappy-view, main',
       singlePhotoSelector: '.photo-well-media-scrappy-view img, .main-photo img, [style*="background-image"]',
-      getImageUrl: (el) => {
+      getImageUrl: (el, maxWidth) => {
+        // Try to get best size from modelExport JSON (single photo page)
+        const bestUrl = GallerySiteConfigs.flickrGetBestSize(maxWidth);
+        if (bestUrl) return bestUrl;
+
+        // Fallback: use img src (gallery view)
         const img = el.tagName === 'IMG' ? el : el.querySelector('img');
         if (img) {
           let src = img.src || img.dataset.src;
           if (src) {
             // Flickr sizes: s=75, q=150, t=100, m=240, n=320, w=400, z=640, c=800, b=1024, h=1600, k=2048, o=original
+            // Note: URL replacement only works for same-secret sizes (b,c,z,w,n,m,t,q,s)
+            // Higher res (k,h,o,3k,4k,5k) have different secrets - need modelExport
             src = src.replace(/_[sqtmnwzc]\.jpg$/i, '_b.jpg');
             src = src.replace(/_[sqtmnwzc]_d\.jpg$/i, '_b.jpg');
           }
@@ -314,9 +321,55 @@ const GallerySiteConfigs = (function() {
     return CONFIGS[siteName] || null;
   }
 
+  /**
+   * Extract best Flickr image URL from page HTML
+   * Flickr embeds all size URLs in the page with escaped slashes
+   * @param {number|null} maxWidth - Max width (null = original)
+   * @returns {string|null} Best available image URL
+   */
+  function flickrGetBestSize(maxWidth) {
+    try {
+      // Get current photo ID from URL
+      const photoIdMatch = window.location.pathname.match(/\/photos\/[^/]+\/(\d+)/);
+      if (!photoIdMatch) {
+        console.log('[archiver] Flickr: not on a single photo page');
+        return null;
+      }
+      const photoId = photoIdMatch[1];
+      console.log(`[archiver] Flickr: looking for photo ID ${photoId}`);
+
+      // Get the full page HTML
+      const html = document.documentElement.innerHTML;
+
+      // Size order: try largest first
+      // For default (8K max), skip 'o' as it may be huge
+      const sizeOrder = maxWidth === null
+        ? ['o', '5k', '4k', '3k', 'k', 'h']
+        : ['5k', '4k', '3k', 'k', 'h'];
+
+      for (const size of sizeOrder) {
+        // Match escaped URL pattern for THIS photo only
+        // \/\/live.staticflickr.com\/SERVER\/PHOTOID_SECRET_SIZE.jpg
+        const pattern = new RegExp(`\\\\/\\\\/live\\.staticflickr\\.com\\\\/\\d+\\\\/${photoId}_[a-f0-9]+_${size}\\.jpg`, 'i');
+        const match = html.match(pattern);
+        if (match) {
+          const url = 'https:' + match[0].replace(/\\\//g, '/');
+          console.log(`[archiver] Flickr: found ${size} size: ${url}`);
+          return url;
+        }
+      }
+
+      console.log('[archiver] Flickr: no high-res sizes found for photo ' + photoId);
+    } catch (e) {
+      console.log('[archiver] Flickr size extraction error:', e);
+    }
+    return null;
+  }
+
   return {
     detectSite,
     getConfig,
+    flickrGetBestSize,
     CONFIGS
   };
 })();
