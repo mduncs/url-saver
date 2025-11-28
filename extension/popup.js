@@ -86,7 +86,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Help link
   helpLink.addEventListener('click', (e) => {
     e.preventDefault();
-    browserAPI.tabs.create({url: 'https://github.com/yourusername/media-archiver'});
+    browserAPI.tabs.create({url: 'https://github.com/mduncs/url-saver'});
   });
 
   // Initial server check

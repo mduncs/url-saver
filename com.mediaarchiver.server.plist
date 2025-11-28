@@ -9,7 +9,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>cd "$HOME/claudium/url-saver/server" &amp;&amp; python3 -m uvicorn main:app --host 127.0.0.1 --port 8888</string>
+        <string>cd "$HOME/code/url-saver/server" &amp;&amp; python3 -m uvicorn main:app --host 127.0.0.1 --port 8888</string>
     </array>
 
     <key>RunAtLoad</key>

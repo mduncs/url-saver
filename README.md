@@ -23,7 +23,7 @@
 
 ```bash
 # 1. Clone and install dependencies
-git clone https://github.com/YOUR_USERNAME/media-archiver
+git clone https://github.com/mduncs/url-saver
 cd media-archiver
 ./install.sh
 
