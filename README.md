@@ -9,7 +9,7 @@
 - **Obsidian-native** - YAML frontmatter sidecars with wiki links
 - **Duplicate detection** - Shows if you've already archived something
 - **Ultra-high-res images** - Downloads tiled images from Google Arts, museums
-- **Twitter integration** - Archive tweets with emotion tagging
+- **Twitter integration** - Archive tweets with screenshots and metadata
 
 ## Supported Sites
 
@@ -51,7 +51,6 @@ brew install dezoomify-rs  # or: cargo install dezoomify-rs
 | **Click** | Full | Media + metadata sidecar |
 | **Shift+Click** | Quick | Media only |
 | **Alt+Click** | Text | Screenshot + metadata (Twitter) |
-| **Alt+Hold** | Emotion | Tag with emotion wheel (Twitter) |
 
 ### Google Arts & Culture
 
