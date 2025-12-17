@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Media Archiver",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "One-click media archival with yt-dlp and gallery-dl",
 
   "browser_specific_settings": {
@@ -21,7 +21,28 @@
 
   "host_permissions": [
     "http://localhost:8888/*",
-    "<all_urls>"
+    "*://twitter.com/*",
+    "*://x.com/*",
+    "*://www.youtube.com/*",
+    "*://youtube.com/*",
+    "*://youtu.be/*",
+    "*://www.reddit.com/*",
+    "*://old.reddit.com/*",
+    "*://reddit.com/*",
+    "*://*.flickr.com/*",
+    "*://*.deviantart.com/*",
+    "*://*.artstation.com/*",
+    "*://*.pinterest.com/*",
+    "*://*.pinterest.co.uk/*",
+    "*://*.pinterest.ca/*",
+    "*://*.pinterest.de/*",
+    "*://*.pinterest.fr/*",
+    "*://artsandculture.google.com/*",
+    "*://*.metmuseum.org/*",
+    "*://*.britishmuseum.org/*",
+    "*://*.rijksmuseum.nl/*",
+    "*://commons.wikimedia.org/*",
+    "*://*.nga.gov/*"
   ],
 
   "background": {
@@ -29,7 +50,6 @@
   },
 
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "48": "icons/icon-48.png"
     }
@@ -38,7 +58,7 @@
   "content_scripts": [
     {
       "matches": ["*://twitter.com/*", "*://x.com/*"],
-      "js": ["config.js", "modules/emotion-wheel.js", "content-twitter.js"],
+      "js": ["config.js", "content-twitter.js"],
       "run_at": "document_idle"
     },
     {
@@ -69,37 +89,6 @@
         "*://*.nga.gov/*"
       ],
       "js": ["config.js", "modules/gallery-site-configs.js", "content-gallery.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["<all_urls>"],
-      "exclude_matches": [
-        "*://twitter.com/*",
-        "*://x.com/*",
-        "*://www.youtube.com/*",
-        "*://youtube.com/*",
-        "*://youtu.be/*",
-        "*://www.reddit.com/*",
-        "*://old.reddit.com/*",
-        "*://reddit.com/*",
-        "*://*.flickr.com/*",
-        "*://*.deviantart.com/*",
-        "*://*.artstation.com/*",
-        "*://*.pinterest.com/*",
-        "*://*.pinterest.co.uk/*",
-        "*://*.pinterest.ca/*",
-        "*://*.pinterest.de/*",
-        "*://*.pinterest.fr/*",
-        "*://artsandculture.google.com/*",
-        "*://*.metmuseum.org/*",
-        "*://*.britishmuseum.org/*",
-        "*://*.rijksmuseum.nl/*",
-        "*://commons.wikimedia.org/*",
-        "*://*.nga.gov/*",
-        "*://*.twitch.tv/*",
-        "*://twitch.tv/*"
-      ],
-      "js": ["content.js"],
       "run_at": "document_idle"
     }
   ],

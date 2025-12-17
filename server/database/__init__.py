@@ -3,7 +3,7 @@ Database module for tracking archives
 """
 
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 import aiosqlite
 import json
@@ -232,7 +232,7 @@ class Database:
             created_at = job_dict.get('created_at')
             if isinstance(created_at, str):
                 created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            age_days = (datetime.now() - created_at).days if created_at else 0
+            age_days = (datetime.now(timezone.utc) - created_at).days if created_at else 0
 
             return {
                 **job_dict,

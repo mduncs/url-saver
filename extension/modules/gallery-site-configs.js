@@ -34,27 +34,35 @@ const GallerySiteConfigs = (function() {
       },
       getPageUrl: (el) => {
         // Try to find a direct link to the individual photo page
-        const link = el.querySelector('a[href*="/photos/"][href$="/"], a[href*="/photos/"][href*="/in/"]');
-        if (link?.href) {
-          // Clean up the URL - extract just the photo page part
-          const match = link.href.match(/(\/photos\/[^/]+\/\d+)/);
+        // Must be careful to exclude gallery/album/with URLs
+        const links = el.querySelectorAll('a[href*="/photos/"]');
+        for (const link of links) {
+          const href = link.href;
+          // Skip gallery-type URLs (these don't point to individual photos)
+          if (href.includes('/with/') || href.includes('/albums/') || href.includes('/sets/') || href.includes('/favorites')) continue;
+          // Match individual photo page pattern: /photos/{user}/{photo_id}
+          const match = href.match(/(\/photos\/[^/]+\/\d+)/);
           if (match) {
             return `https://www.flickr.com${match[1]}/`;
           }
-          return link.href;
         }
         // Fallback: extract photo ID from image URL and construct page URL
         const img = el.tagName === 'IMG' ? el : el.querySelector('img');
-        if (img?.src) {
+        // Handle lazy loading - Flickr uses data-src for deferred images
+        const imgSrc = img?.src || img?.dataset?.src;
+        if (imgSrc) {
           // Image URL format: https://live.staticflickr.com/65535/PHOTOID_secret_size.jpg
-          const photoIdMatch = img.src.match(/\/(\d+)_[a-f0-9]+_[a-z]\.jpg/i);
+          // OR: https://live.staticflickr.com/65535/PHOTOID_secret.jpg (no size suffix in some galleries)
+          const photoIdMatch = imgSrc.match(/\/(\d+)_[a-f0-9]+(?:_[a-z0-9]+)?\.jpg/i);
           if (photoIdMatch) {
             // Get username from current URL
             const userMatch = window.location.pathname.match(/\/photos\/([^/]+)/);
             const username = userMatch ? userMatch[1] : 'unknown';
+            console.log(`[archiver] Flickr: extracted photo page from img src: /photos/${username}/${photoIdMatch[1]}/`);
             return `https://www.flickr.com/photos/${username}/${photoIdMatch[1]}/`;
           }
         }
+        console.warn('[archiver] Flickr: could not extract photo page URL, using window.location');
         return window.location.href;
       },
       getMetadata: (el) => {
@@ -266,9 +274,11 @@ const GallerySiteConfigs = (function() {
           });
         });
 
-        const title = document.querySelector('h1')?.textContent?.trim() ||
-                      details['Title'] ||
-                      document.querySelector('meta[property="og:title"]')?.content || '';
+        // Extract title - prioritize itemprop="name" for better accuracy
+        const title = document.querySelector('[itemprop="name"]')?.textContent?.trim() ||
+                      document.querySelector('meta[property="og:title"]')?.content ||
+                      document.querySelector('h1')?.textContent?.trim() ||
+                      details['Title'] || '';
 
         let artist = '';
         const creatorLink = document.querySelector('a[href*="/entity/"]');
@@ -291,7 +301,14 @@ const GallerySiteConfigs = (function() {
         const description = parts.join(' | ') ||
                            document.querySelector('meta[property="og:description"]')?.content || '';
 
-        return { title, artist, description };
+        // Extract asset ID from URL: /asset/{title-slug}/{ASSET_ID}
+        let assetId = '';
+        const urlMatch = window.location.pathname.match(/\/asset\/[^/]+\/([^/]+)/);
+        if (urlMatch) {
+          assetId = urlMatch[1];
+        }
+
+        return { title, artist, description, assetId };
       }
     }
   };

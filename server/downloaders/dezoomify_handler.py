@@ -179,18 +179,13 @@ class DezoomifyHandler(BaseDownloader):
                         metadata['resolution'] = f"{img.width}x{img.height}"
 
                         # Check minimum pixel dimensions (default 2000px on shortest side)
+                        # Mark small images but don't delete - let user review later
                         min_pixels = options.get('min_pixels', 2000)
                         shortest_side = min(img.width, img.height)
 
                         if shortest_side < min_pixels:
-                            logger.warning(f"Downloaded image too small: {img.width}x{img.height} (min: {min_pixels}px)")
-                            output_path.unlink()
-                            return DownloadResult(
-                                file_path=None,
-                                metadata={'url': url, 'width': img.width, 'height': img.height},
-                                success=False,
-                                error=f"Downloaded image too small ({img.width}x{img.height}). Minimum: {min_pixels}px on shortest side. Try a different resolution or check if full image is available."
-                            )
+                            logger.warning(f"Downloaded image small: {img.width}x{img.height} (min: {min_pixels}px)")
+                            metadata['is_small'] = True
                 except ImportError:
                     logger.debug("PIL not available, skipping dimension check")
                 except Exception as e:

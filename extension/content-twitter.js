@@ -1,5 +1,4 @@
 // Twitter/X specific content script with minimally invasive UI
-// Uses EmotionWheel module loaded from modules/emotion-wheel.js
 
 (function() {
   'use strict';
@@ -218,10 +217,6 @@
       <div class="archiver-menu-item" data-mode="text">
         ${getIcon('text', 16)} Text only <kbd>⌥</kbd>
       </div>
-      <div class="archiver-menu-divider"></div>
-      <div class="archiver-menu-item emotion-wheel-hint" data-mode="emotion">
-        <span class="emotion-wheel-icon">🎨</span> React sort <kbd>⌥+hold</kbd>
-      </div>
     `;
     return menu;
   }
@@ -420,11 +415,6 @@
     });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // EMOTION WHEEL: Alt+click triggers radial emotion selector for react images
-    // ═══════════════════════════════════════════════════════════════════════
-
-    let emotionWheelActive = false;
-
     // Perform download with optional emotion data
     async function performDownload(saveMode, emotionData = null) {
       console.log('[archiver] performDownload called:', { saveMode, emotionData, tweetId: tweetData.tweetId, url: tweetData.tweetUrl });
@@ -514,48 +504,10 @@
       }
     }
 
-    // Handle mousedown for emotion wheel activation
-    button.addEventListener('mousedown', (e) => {
-      console.log('[archiver] mousedown:', { altKey: e.altKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, button: e.button });
-
-      if (downloadingPosts.has(tweetData.tweetId)) return;
-
-      // Alt/Option+click opens emotion wheel (altKey on Mac = Option key)
-      if (e.altKey) {
-        console.log('[archiver] Alt+click detected, showing emotion wheel');
-        e.preventDefault();
-        e.stopPropagation();
-
-        emotionWheelActive = true;
-        menu.classList.remove('visible');
-        clearTimeout(menuTimeout);
-
-        // Show emotion wheel centered on click position (uses EmotionWheel module)
-        EmotionWheel.show(e.clientX, e.clientY, (emotionData) => {
-          console.log('[archiver] Emotion selected:', emotionData);
-          // Emotion selected - perform quick download with emotion tag
-          emotionWheelActive = false;
-          performDownload('quick', emotionData);
-        });
-
-        // Setup mouseup handler to capture release
-        const handleMouseUp = () => {
-          console.log('[archiver] mouseup - releasing wheel');
-          EmotionWheel.release();
-          emotionWheelActive = false;
-          document.removeEventListener('mouseup', handleMouseUp);
-        };
-        document.addEventListener('mouseup', handleMouseUp);
-      }
-    });
-
-    // Handle click (only if not using emotion wheel)
+    // Handle click - Alt=text mode, Shift=quick mode, default=full mode
     button.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-
-      // Skip if emotion wheel was used (alt+click)
-      if (e.altKey || emotionWheelActive) return;
 
       if (downloadingPosts.has(tweetData.tweetId)) return;
 
@@ -780,12 +732,18 @@
 
       // Insert AFTER bookmark (use bookmark.nextSibling), not before share
       // This ensures: ... | bookmark | OURS | share
-      if (bookmarkWrapper?.nextSibling) {
-        actionBar.insertBefore(wrapper, bookmarkWrapper.nextSibling);
-      } else if (shareWrapper) {
-        actionBar.insertBefore(wrapper, shareWrapper);
-      } else {
-        actionBar.appendChild(wrapper);
+      try {
+        if (bookmarkWrapper?.nextSibling && actionBar.contains(bookmarkWrapper.nextSibling)) {
+          actionBar.insertBefore(wrapper, bookmarkWrapper.nextSibling);
+        } else if (shareWrapper && actionBar.contains(shareWrapper)) {
+          actionBar.insertBefore(wrapper, shareWrapper);
+        } else {
+          actionBar.appendChild(wrapper);
+        }
+      } catch (e) {
+        console.warn('[archiver] Twitter action bar insertion failed:', e.message);
+        // Fallback: append to end
+        try { actionBar.appendChild(wrapper); } catch (_) {}
       }
 
       // Fix spacing: bookmark has 9px marginRight that creates uneven gaps
@@ -934,27 +892,6 @@
       height: 1px;
       background: rgba(255, 255, 255, 0.1);
       margin: 6px 0;
-    }
-
-    /* Emotion wheel menu hint */
-    .emotion-wheel-hint {
-      font-size: 12px;
-      opacity: 0.5;
-    }
-
-    .emotion-wheel-icon {
-      font-size: 14px;
-    }
-
-    /* Emotion wheel overlay */
-    .emotion-wheel {
-      user-select: none;
-      -webkit-user-select: none;
-    }
-
-    .emotion-wheel path {
-      transform-origin: center;
-      transform-box: fill-box;
     }
 
     /* Portal wrapper for detail view */

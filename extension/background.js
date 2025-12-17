@@ -1,10 +1,21 @@
 // Media Archiver - Background Script
+console.log('[archiver] background loaded');
 
-// Firefox compatibility: use browser API
 const browser = window.browser || window.chrome;
-
 const SERVER_URL = 'http://localhost:8888';
 let serverAvailable = false;
+
+// Update extension icon based on server status
+function updateIcon(available) {
+  const path = available ? 'icons/archive' : 'icons/archive-offline';
+  browser.action.setIcon({
+    path: {
+      "16": `${path}-16.png`,
+      "48": `${path}-48.png`,
+      "128": `${path}-128.png`
+    }
+  });
+}
 
 // Check server availability
 async function checkServer() {
@@ -20,28 +31,16 @@ async function checkServer() {
   }
 }
 
-// Update extension icon based on server status
-function updateIcon(available) {
-  const path = available ? 'icons/archive' : 'icons/archive-offline';
-  browser.action.setIcon({
-    path: {
-      "16": `${path}-16.png`,
-      "48": `${path}-48.png`,
-      "128": `${path}-128.png`
-    }
-  });
-}
-
-// Periodic health check every 5 seconds
-setInterval(checkServer, 5000);
-checkServer(); // Initial check
+// Periodic health check every 30 seconds
+setInterval(checkServer, 30000);
+checkServer();
 
 // Create context menu for right-click saving
 browser.runtime.onInstalled.addListener(() => {
   browser.contextMenus.create({
     id: "save-media",
     title: "Archive this media",
-    contexts: ["image", "video", "audio", "link", "page"]
+    contexts: ["image", "link", "page"]
   });
 });
 
@@ -50,16 +49,18 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   await archiveUrl(targetUrl, tab);
 });
 
+// Handle clicking the extension icon
+browser.action.onClicked.addListener(async (tab) => {
+  await archiveUrl(tab.url, tab);
+});
+
 // Main archive function
 async function archiveUrl(url, tab, options = {}) {
-  console.log('[archiver-bg] archiveUrl called:', { url, saveMode: options.saveMode, hasScreenshot: !!options.screenshot });
+  console.log('[archiver-bg] archiveUrl called:', { url, saveMode: options.saveMode });
 
   if (!serverAvailable) {
-    console.log('[archiver-bg] server not available, checking...');
-    // Try one more time
     const available = await checkServer();
     if (!available) {
-      console.error('[archiver-bg] server offline!');
       browser.notifications.create({
         type: 'basic',
         iconUrl: 'icons/archive-48.png',
@@ -71,12 +72,9 @@ async function archiveUrl(url, tab, options = {}) {
   }
 
   try {
-    // Get all cookies for the domain
     const urlObj = new URL(url);
     const cookies = await browser.cookies.getAll({ domain: urlObj.hostname });
-    console.log('[archiver-bg] got', cookies.length, 'cookies for', urlObj.hostname);
 
-    // Also get cookies for parent domain (for sites like x.com)
     const domainParts = urlObj.hostname.split('.');
     if (domainParts.length > 2) {
       const parentDomain = domainParts.slice(-2).join('.');
@@ -84,7 +82,6 @@ async function archiveUrl(url, tab, options = {}) {
       cookies.push(...parentCookies);
     }
 
-    // Prepare archive request
     const payload = {
       url: url,
       page_title: tab?.title || '',
@@ -101,8 +98,6 @@ async function archiveUrl(url, tab, options = {}) {
       options: options
     };
 
-    // Send to server
-    console.log('[archiver-bg] sending POST to /archive with url:', payload.url);
     const response = await fetch(`${SERVER_URL}/archive`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,9 +105,7 @@ async function archiveUrl(url, tab, options = {}) {
     });
 
     const result = await response.json();
-    console.log('[archiver-bg] server response:', result);
 
-    // Show notification
     browser.notifications.create({
       type: 'basic',
       iconUrl: 'icons/archive-48.png',
@@ -144,12 +137,10 @@ async function archiveImage(request, tab) {
   try {
     const imageUrl = request.imageUrl || request.url;
 
-    // Get cookies for the image domain (needed for some sites like Flickr)
     let cookies = [];
     try {
       const urlObj = new URL(imageUrl);
       cookies = await browser.cookies.getAll({ domain: urlObj.hostname });
-      // Also try parent domain
       const parts = urlObj.hostname.split('.');
       if (parts.length > 2) {
         const parentCookies = await browser.cookies.getAll({ domain: parts.slice(-2).join('.') });
@@ -179,8 +170,6 @@ async function archiveImage(request, tab) {
       options: request.options || {}
     };
 
-    console.log('[archiver] Sending to server:', payload.image_url, 'with', cookies.length, 'cookies');
-
     const response = await fetch(`${SERVER_URL}/archive-image`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -188,7 +177,6 @@ async function archiveImage(request, tab) {
     });
 
     const result = await response.json();
-    console.log('[archiver] Server result:', result);
     return result;
   } catch (error) {
     console.error('Archive image error:', error);
@@ -209,38 +197,25 @@ browser.commands.onCommand.addListener(async (command) => {
 // Capture and crop screenshot to specified bounds
 async function captureScreenshot(tabId, bounds) {
   try {
-    // Capture the visible tab as a data URL
     const dataUrl = await browser.tabs.captureVisibleTab(null, {
       format: 'png'
     });
 
-    // If no bounds specified, return full screenshot
     if (!bounds) {
       return dataUrl;
     }
 
-    // Create an offscreen canvas to crop the image
     const img = await createImageBitmap(await (await fetch(dataUrl)).blob());
-
     const canvas = new OffscreenCanvas(bounds.width, bounds.height);
     const ctx = canvas.getContext('2d');
-
-    // Use viewportY for cropping (relative to visible viewport)
     const sourceY = bounds.viewportY * (bounds.dpr || 1);
 
     ctx.drawImage(
       img,
-      bounds.x,           // source x
-      sourceY,            // source y (viewport-relative, scaled by DPR)
-      bounds.width,       // source width
-      bounds.height,      // source height
-      0,                  // dest x
-      0,                  // dest y
-      bounds.width,       // dest width
-      bounds.height       // dest height
+      bounds.x, sourceY, bounds.width, bounds.height,
+      0, 0, bounds.width, bounds.height
     );
 
-    // Convert to base64 PNG
     const blob = await canvas.convertToBlob({ type: 'image/png' });
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -253,33 +228,26 @@ async function captureScreenshot(tabId, bounds) {
   }
 }
 
-// Message handler for popup and content scripts
+// Message handler for content scripts
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('[archiver-bg] message received:', request.action, request.url || '');
+  console.log('[archiver-bg] message received:', request.action);
 
   if (request.action === 'captureScreenshot') {
     captureScreenshot(sender.tab?.id, request.bounds)
       .then(screenshot => sendResponse({ screenshot }))
       .catch(error => sendResponse({ screenshot: null, error: error.message }));
-    return true; // Keep channel open for async response
+    return true;
   }
 
   if (request.action === 'archive') {
-    console.log('[archiver-bg] handling archive action for:', request.url);
     archiveUrl(request.url, sender.tab || request.tab, {
       ...request.options,
       saveMode: request.saveMode,
       screenshot: request.screenshot
     })
-      .then(result => {
-        console.log('[archiver-bg] archive complete, sending response:', result?.success);
-        sendResponse(result);
-      })
-      .catch(error => {
-        console.error('[archiver-bg] archive failed:', error);
-        sendResponse({success: false, error: error.message});
-      });
-    return true; // Keep channel open for async response
+      .then(sendResponse)
+      .catch(error => sendResponse({success: false, error: error.message}));
+    return true;
   }
 
   if (request.action === 'archiveImage') {

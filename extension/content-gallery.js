@@ -427,6 +427,20 @@
     btn.title = 'Click: 4K | ⇧: 8K | ⌥: Full res (large!)';
     Object.assign(btn.style, BUTTON_STYLES);
 
+    // Extract assetId from the URL (works for both gallery thumbnails and asset pages)
+    // URL pattern: /asset/{title-slug}/{ASSET_ID} or /u/N/asset/{title-slug}/{ASSET_ID}
+    let assetId = '';
+    try {
+      const urlPath = new URL(assetUrl).pathname;
+      const assetMatch = urlPath.match(/\/asset\/[^/]+\/([^/]+)/);
+      if (assetMatch) {
+        assetId = assetMatch[1];
+        console.log(`[archiver] Google Arts: extracted assetId from URL: ${assetId}`);
+      }
+    } catch (e) {
+      console.warn('[archiver] Google Arts: could not parse assetUrl:', assetUrl);
+    }
+
     btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -469,7 +483,8 @@
             title: metadata.title,
             author: metadata.artist,
             description: metadata.description,
-            pageUrl: assetUrl
+            pageUrl: assetUrl,
+            assetId: assetId || metadata.assetId || ''
           }
         });
 
@@ -579,9 +594,18 @@
       const customWrapper = document.createElement('div');
       customWrapper.className = 'archiver-img-wrapper';
       customWrapper.style.cssText = 'position: relative; display: inline-block;';
-      img.parentElement.insertBefore(customWrapper, img);
-      customWrapper.appendChild(img);
-      wrapper = customWrapper;
+      // Defensive check: ensure img is still a child of its parent before manipulating
+      const parent = img.parentElement;
+      if (parent && parent.contains(img)) {
+        try {
+          parent.insertBefore(customWrapper, img);
+          customWrapper.appendChild(img);
+          wrapper = customWrapper;
+        } catch (e) {
+          console.warn('[archiver] DOM manipulation failed, using parent as wrapper:', e.message);
+          // Fall through to use existing wrapper
+        }
+      }
     } else {
       if (computedStyle.position === 'static') {
         wrapper.style.position = 'relative';

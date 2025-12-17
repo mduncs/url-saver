@@ -88,6 +88,7 @@ class ImageMetadata(BaseModel):
     page_url: Optional[str] = None
     tags: List[str] = []
     dateTaken: str = ""
+    assetId: str = ""  # For Google Arts & Culture uniqueness
 
 class CookieData(BaseModel):
     name: str
@@ -738,12 +739,18 @@ async def archive_image(request: ImageArchiveRequest):
         platform = request.metadata.platform or "web"
         title = request.metadata.title or "untitled"
         author = request.metadata.author or ""
+        asset_id = request.metadata.assetId or ""
 
-        # Include author in filename if available
+        # Build title string for filename
+        title_str = title
         if author:
-            basename = storage.generate_base_name(platform, f"{author}-{title}")
-        else:
-            basename = storage.generate_base_name(platform, title)
+            title_str = f"{author}-{title}"
+
+        # For Google Arts: append asset ID for uniqueness
+        if platform == "googlearts" and asset_id:
+            title_str = f"{title_str}-{asset_id}"
+
+        basename = storage.generate_base_name(platform, title_str)
 
         # Check if a specialized handler should handle this URL
         handler = downloader.get_handler(request.image_url)
@@ -762,6 +769,10 @@ async def archive_image(request: ImageArchiveRequest):
 
             if result.success and result.file_path:
                 image_path = Path(result.file_path)
+                # Check if image was marked as small
+                if result.metadata.get('is_small'):
+                    basename = basename + "-small"
+                    logger.info(f"Marking as small: {result.metadata.get('resolution', 'unknown')}")
                 # Rename to match our naming convention
                 ext = image_path.suffix or '.jpg'
                 new_path = output_dir / f"{basename}{ext}"
@@ -803,7 +814,7 @@ async def archive_image(request: ImageArchiveRequest):
                 # Fallback: try higher resolution variants via URL manipulation
                 logger.warning(f"gallery-dl failed, trying URL size variants: {result.error}")
 
-                # Flickr URL pattern: {id}_{secret}_{size}.{ext}
+                # Flickr URL pattern: {id}_{secret}_{size}.{ext} OR {id}_{secret}.{ext} (no size suffix in some galleries)
                 # Sizes: s=75, q=150, t=100, m=240, n=320, w=400, z=640, c=800, b=1024, h=1600, k=2048, o=original
                 import re
                 base_url = request.image_url
@@ -814,6 +825,7 @@ async def archive_image(request: ImageArchiveRequest):
                 urls_to_try = []
                 match = re.search(size_pattern, base_url)
                 if match:
+                    # Has size suffix - try different sizes
                     ext_part = match.group(2)
                     base_without_size = re.sub(size_pattern, '', base_url)
                     if max_width is None:
@@ -826,6 +838,21 @@ async def archive_image(request: ImageArchiveRequest):
                         logger.info("Flickr fallback: trying public sizes (_k, _h, _b)")
                     for size in sizes:
                         urls_to_try.append(f"{base_without_size}{size}{ext_part}")
+                else:
+                    # No size suffix - add size before extension
+                    # Example: 54769514860_65965c98e7.jpg -> 54769514860_65965c98e7_k.jpg
+                    base_match = re.search(r'^(.+)(\.[a-zA-Z]+)$', base_url)
+                    if base_match:
+                        base_without_ext = base_match.group(1)
+                        ext_part = base_match.group(2)
+                        if max_width is None:
+                            sizes = ['_o', '_k', '_h', '_b']
+                            logger.info("Flickr fallback (no size suffix): trying original (_o, _k, _h, _b)")
+                        else:
+                            sizes = ['_k', '_h', '_b']
+                            logger.info("Flickr fallback (no size suffix): trying public sizes (_k, _h, _b)")
+                        for size in sizes:
+                            urls_to_try.append(f"{base_without_ext}{size}{ext_part}")
                 urls_to_try.append(base_url)  # Original as last resort
 
                 image_path = None
@@ -857,18 +884,24 @@ async def archive_image(request: ImageArchiveRequest):
                             logger.debug(f"Size variant {try_url} failed: {e}")
                             continue
 
-                    # If only got _b (1024px), try fetching page HTML for high-res URLs
+                    # If only got _b (1024px) or smaller, try fetching page HTML for high-res URLs
                     # High-res sizes (k,h,3k,4k,5k,o) have different secrets than thumbnail
-                    if image_path and downloaded_size == 'b' and request.page_url:
-                        logger.info("Got _b size only, trying page HTML extraction for high-res")
+                    # Also trigger if downloaded_size doesn't look like a valid size code (e.g., it's the secret from a no-suffix URL)
+                    small_sizes = ['b', 'c', 'z', 'w', 'n', 'm', 't', 'q', 's']
+                    should_try_page_html = (
+                        image_path and request.page_url and
+                        (downloaded_size in small_sizes or len(downloaded_size) > 1)  # 'b' or likely a secret (multi-char)
+                    )
+                    if should_try_page_html:
+                        logger.info(f"Got small/thumbnail size ({downloaded_size}), trying page HTML extraction for high-res")
                         try:
                             page_response = await client.get(request.page_url, headers={
                                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
                             })
                             if page_response.status_code == 200:
                                 html = page_response.text
-                                # Extract photo ID from image URL
-                                photo_id_match = re.search(r'/(\d+)_[a-f0-9]+_[a-z0-9]+\.jpg', request.image_url, re.I)
+                                # Extract photo ID from image URL (handle both with and without size suffix)
+                                photo_id_match = re.search(r'/(\d+)_[a-f0-9]+(?:_[a-z0-9]+)?\.jpg', request.image_url, re.I)
                                 if photo_id_match:
                                     photo_id = photo_id_match.group(1)
                                     # Try sizes in order: 5k, 4k, 3k, k, h (skip o unless alt-click)
@@ -896,20 +929,24 @@ async def archive_image(request: ImageArchiveRequest):
                 if not image_path:
                     raise ValueError("All Flickr size variants failed")
 
-                # Check pixel dimensions
+                # Check pixel dimensions and mark small images
                 try:
                     from PIL import Image
                     with Image.open(image_path) as img:
-                        # Check minimum (2000px default)
+                        # Check minimum (2000px default) - mark small but don't delete
                         min_pixels = options.get('min_pixels', 2000)
                         shortest_side = min(img.width, img.height)
                         if shortest_side < min_pixels:
-                            logger.warning(f"Flickr fallback too small: {img.width}x{img.height} (min: {min_pixels}px)")
-                            image_path.unlink()
-                            raise ValueError(f"Downloaded image too small ({img.width}x{img.height}). Min: {min_pixels}px. gallery-dl API may be needed for original resolution.")
+                            logger.warning(f"Flickr fallback small: {img.width}x{img.height} (min: {min_pixels}px)")
+                            # Rename with -small suffix instead of deleting
+                            small_path = image_path.with_stem(image_path.stem + "-small")
+                            image_path.rename(small_path)
+                            image_path = small_path
+                            basename = basename + "-small"
+                            logger.info(f"Marked as small: {image_path.name}")
 
                         # Check maximum if set (8K default click)
-                        if max_width and max(img.width, img.height) > max_width:
+                        elif max_width and max(img.width, img.height) > max_width:
                             logger.warning(f"Flickr image exceeds max_width: {img.width}x{img.height} > {max_width}")
                             # Don't delete - user might still want it, just warn
                             logger.info(f"Keeping image despite exceeding max_width (use Alt+Click for unlimited)")
