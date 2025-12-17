@@ -3,189 +3,145 @@
 ## Goal
 Zotero/Obsidian for media. Browser extension → local archive.
 
-## Flow
+## Architecture
 ```
-Extension → POST /archive → FastAPI → yt-dlp/gallery-dl → ~/MediaArchive/
+┌─────────────────────────────────────────────────────────────┐
+│  Firefox Extension                                          │
+│  - cmd+shift+s / icon click / right-click menu              │
+│  - content scripts: twitter, youtube, reddit, galleries     │
+│  - grabs cookies, page metadata, optional screenshot        │
+│  - POSTs to localhost:8888                                  │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+          POST /archive ──────────────────┐
+          POST /archive-image             │
+          GET /health, /jobs, /stats      │
+          POST /check-archived            │
+                       │                  │
+                       ▼                  │
+┌─────────────────────────────────────────┴───────────────────┐
+│  FastAPI Server (localhost:8888)                            │
+│                                                             │
+│  main.py:                                                   │
+│  - ArchiveRequest model (url, cookies, screenshot, mode)    │
+│  - ImageArchiveRequest model (for gallery sites)            │
+│  - process_download() background task                       │
+│  - Twitter special handling (direct HTTP for images)        │
+│  - .md sidecar generation (Obsidian-native)                 │
+│  - /dashboard HTML UI                                       │
+│                                                             │
+│  storage.py: ~/MediaArchive/YYYY-MM-DD/ structure           │
+│  database/: SQLite job tracking (archive.db)                │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Downloaders (server/downloaders/)                          │
+│                                                             │
+│  ytdlp_handler.py    - videos (youtube, twitter, etc)       │
+│  gallery_handler.py  - images (flickr, deviantart, etc)     │
+│  dezoomify_handler.py - tiled/zoomable (google arts, IIIF)  │
+│  base.py             - DownloadManager picks handler by URL │
+└─────────────────────────────────────────────────────────────┘
+                       │
+                       ▼
+              ~/MediaArchive/
+              ├── archive.db
+              └── 2024-12-16/
+                  ├── index.md
+                  ├── twitter-user-123456.jpg
+                  ├── twitter-user-123456.md   (sidecar)
+                  └── youtube-video-abc.mp4
 ```
 
-## yt-dlp Defaults (from ~/.zshrc)
-```bash
-yt-dlp -f bestvideo+bestaudio/best \
-  --merge-output-format mp4 \
-  --concurrent-fragments 4 \
-  --add-metadata \
-  --embed-thumbnail \
-  --embed-subs
+## Storage
+```
+~/MediaArchive/YYYY-MM-DD/
+├── YYYY-MM-DD-platform-slug.mp4
+├── YYYY-MM-DD-platform-slug.context.png  (screenshot)
+├── YYYY-MM-DD-platform-slug.md           (sidecar)
+└── index.md                              (daily log)
 ```
 
-## Design Direction (WIP)
+## Save Modes
+- **full**: media + .md sidecar + optional screenshot
+- **quick**: media only (shift+click)
+- **text**: screenshot + metadata only, no download (alt+click)
 
-**Storage:**
-```
-~/MediaArchive/YYYY-MM/
-├── HHMMSS-platform-slug.mp4
-├── HHMMSS-platform-slug.context.png
-├── HHMMSS-platform-slug.json
-└── index.md
-```
+## Special Handling
+- **twitter images**: direct HTTP download (faster than gallery-dl)
+- **twitter video/gif**: falls back to gallery-dl/yt-dlp
+- **flickr**: gallery-dl → URL size variants → page HTML scraping for high-res
+- **google arts/IIIF**: dezoomify-rs for tiled zoomable images
 
-**Save modes:**
-- Click = full (media + context.png + json)
-- Shift+Click = quick (media only)
-- Alt+Click = text-only (context.png + json)
+## Extension Notes
+
+**No popup** - Firefox has a bug where popup scripts break certain Next.js sites
+(depop.com, possibly others). Icon click archives directly instead.
+
+**Content scripts:**
+- `content-twitter.js` - tweet archiving with emotion wheel
+- `content-youtube.js` - video page archiving
+- `content-reddit.js` - post/comment archiving
+- `content-gallery.js` - flickr, museums, art sites
 
 ## Key Files
-- `server/main.py` — FastAPI
-- `server/downloaders/ytdlp_handler.py` — yt-dlp
-- `extension/background.js` — server comms
-- `extension/content-twitter.js` — twitter UI
+- `server/main.py` — FastAPI routes and download logic
+- `server/downloaders/` — yt-dlp, gallery-dl, dezoomify handlers
+- `server/storage/` — file organization
+- `server/database/` — SQLite job tracking
+- `extension/background.js` — server comms, no popup
+- `extension/content-*.js` — per-site UI integration
 
 ## Commands
 ```bash
+# install
 ./install.sh
+
+# run server manually
 cd server && source venv/bin/activate && python3 -m uvicorn main:app --port 8888
+
+# launchd (auto-start)
+launchctl load ~/Library/LaunchAgents/com.mediaarchiver.server.plist
+launchctl list | grep mediaarchiver
+
+# logs
+cat /tmp/media-archiver.log
 ```
 
-## Generic Image Downloader Design (WIP)
-
-### Principles from Twitter Implementation
-
-**UI Integration:**
-- Match native UI styling (icon size, colors, spacing)
-- Clone existing button wrappers for perfect flex alignment
-- Fix spacing quirks (lazy-loaded elements, margin overrides)
-- Single action: click to download (no modes for generic images)
-- Shift+click: download without sidecar (quick mode)
-
-**Filename Format:**
-```
-HHMMSS-platform-username-title.ext
-HHMMSS-platform-username-title.md   ← sidecar
-```
-- Time prefix: chronological sorting within day
-- Platform: quick visual identification
-- Username: attribution (where available)
-- Title: up to 150 chars, slugified
-- Metadata in `.md` sidecar with YAML frontmatter (Obsidian-native)
-
-**Sidecar Format (.md):**
-```markdown
----
-source: https://flickr.com/photos/...
-platform: flickr
-author: profzucker
-title: Brass Bowl with Inlay
-archived: 2025-11-25T14:30:52
-resolution: 6000x4000
----
-
-![[143052-flickr-profzucker-brass-bowl.jpg]]
-```
-- Participates in Obsidian graph
-- Human readable/editable
-- Can add notes below frontmatter
-- Future-proof plain text
-
-**Image Quality:**
-- Always fetch highest resolution available
-- gallery-dl: `size-max: 6000` for Flickr
-- yt-dlp: `format: best`
-- Museums: look for "download original" links, zoom tiles
-
-**Target Sites:**
-1. **Flickr** — gallery-dl, high-res originals
-2. **Museums** (Met, British Museum, Rijks, etc.) — IIIF/zoom tiles
-3. **Art sites** (ArtStation, DeviantArt, Pixiv) — gallery-dl
-4. **Image boards** (Imgur, etc.) — gallery-dl
-5. **General web** — largest `<img>` or `srcset` parsing
-
-### Implementation Approach
-
-**Option A: Site-specific content scripts**
-- `content-flickr.js`, `content-museum.js`, etc.
-- Pros: tailored UI per site
-- Cons: maintenance burden
-
-**Option B: Generic content script + site configs**
-- Single `content-generic.js` with site detection
-- Config object per domain for selectors
-- Pros: DRY, easier to add sites
-- Cons: may not handle edge cases
-
-**Option C: Context menu + keyboard shortcut**
-- Right-click → "Archive image"
-- Ctrl+Shift+S on any page
-- Pros: works everywhere immediately
-- Cons: no inline UI feedback
-
-**Recommended: B + C**
-- Generic script with site configs for major sites
-- Context menu fallback for unsupported sites
-- Keyboard shortcut for power users
-
-## Gallery Implementation (content-gallery.js)
-
-Single content script handles all gallery/image sites with per-site configs.
-
-**Supported sites:**
-- Flickr, DeviantArt, ArtStation, Pinterest
-- Museums: Met, British Museum, Rijksmuseum, NGA, Wikimedia Commons
-- Google Arts & Culture (via dezoomify-rs)
-
-**Site config structure:**
-```javascript
-SITE_CONFIG[siteName] = {
-  itemSelector: '.photo-card, .thumbnail',  // Elements to add buttons to
-  containerSelector: '.gallery, main',       // MutationObserver target
-  getImageUrl: (el) => el.querySelector('img')?.src,
-  getPageUrl: (el) => el.querySelector('a')?.href,
-  getMetadata: (el) => ({ title, artist, description })
-}
-```
-
-**Rich metadata fetching (Flickr):**
-When archiving from gallery view, fetches single photo page to extract:
-- Title, author, description
-- Tags (up to 10)
-- Date taken
-
-```javascript
-async function fetchFlickrPhotoMetadata(pageUrl) {
-  const html = await fetch(pageUrl).then(r => r.text());
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  return {
-    title: doc.querySelector('.photo-title')?.textContent,
-    artist: doc.querySelector('.owner-name a')?.textContent,
-    tags: [...doc.querySelectorAll('.tags-list a.tag')].map(t => t.textContent),
-    dateTaken: doc.querySelector('.date-taken-label')?.textContent
-  };
-}
-```
-
-**Server endpoint:** `POST /archive-image`
-```python
-class ImageMetadata(BaseModel):
-    platform: str = "web"
-    title: str = ""
-    author: str = ""
-    description: str = ""
-    page_url: Optional[str] = None
-    tags: List[str] = []
-    dateTaken: str = ""
-```
-
-**Sidecar output (.md):**
+## Sidecar Format (.md)
 ```yaml
 ---
-source: https://live.staticflickr.com/...
+source: https://flickr.com/photos/...
 platform: flickr
 author: "Steven Zucker"
 title: "Brass Bowl with Inlay"
 archived: 2025-11-25T14:30:52
 page_url: https://www.flickr.com/photos/profzucker/...
 tags: ["art", "metalwork", "islamic"]
-date_taken: "November 15, 2024"
 ---
 
 ![[143052-flickr-profzucker-brass-bowl.jpg]]
+```
+
+Obsidian-native: participates in graph, human readable, future-proof plain text.
+
+## Gallery Sites (content-gallery.js)
+
+Single content script with per-site configs:
+
+**Supported:**
+- Flickr, DeviantArt, ArtStation, Pinterest
+- Museums: Met, British Museum, Rijksmuseum, NGA, Wikimedia Commons
+- Google Arts & Culture (dezoomify-rs)
+
+**Config structure:**
+```javascript
+SITE_CONFIG[siteName] = {
+  itemSelector: '.photo-card',
+  containerSelector: '.gallery',
+  getImageUrl: (el) => el.querySelector('img')?.src,
+  getPageUrl: (el) => el.querySelector('a')?.href,
+  getMetadata: (el) => ({ title, artist, description })
+}
 ```
